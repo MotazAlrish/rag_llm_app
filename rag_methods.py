@@ -34,19 +34,20 @@ def stream_llm_response(llm_stream, messages):
 
 
 # --- Indexing Phase ---
-
+# Load user-uploaded documents into a vector database for retrieval during conversations.
 def load_doc_to_db():
     # Use loader according to doc type
-    if "rag_docs" in st.session_state and st.session_state.rag_docs:
+    if "rag_docs" in st.session_state and st.session_state.rag_docs: # This checks if there are documents stored in the rag_docs session state.
         docs = [] 
         for doc_file in st.session_state.rag_docs:
-            if doc_file.name not in st.session_state.rag_sources:
-                if len(st.session_state.rag_sources) < DB_DOCS_LIMIT:
+            if doc_file.name not in st.session_state.rag_sources: # Avoiding Duplicate Processing
+                if len(st.session_state.rag_sources) < DB_DOCS_LIMIT: # Prevents adding more documents than the defined limit (DB_DOCS_LIMIT).
+                    # Saving the Uploaded Document Locally
                     os.makedirs("source_files", exist_ok=True)
                     file_path = f"./source_files/{doc_file.name}"
                     with open(file_path, "wb") as file:
                         file.write(doc_file.read())
-
+                    # Choosing the Right Loader Based on File Type
                     try:
                         if doc_file.type == "application/pdf":
                             loader = PyPDFLoader(file_path)
@@ -57,20 +58,20 @@ def load_doc_to_db():
                         else:
                             st.warning(f"Document type {doc_file.type} not supported.")
                             continue
-
+                        # Loading the Document Content
                         docs.extend(loader.load())
                         st.session_state.rag_sources.append(doc_file.name)
 
                     except Exception as e:
                         st.toast(f"Error loading document {doc_file.name}: {e}", icon="⚠️")
                         print(f"Error loading document {doc_file.name}: {e}")
-                    
+                    # Deletes the temporary file after we get the file content
                     finally:
                         os.remove(file_path)
 
                 else:
                     st.error(F"Maximum number of documents reached ({DB_DOCS_LIMIT}).")
-
+        # Splitting and Storing Documents in the Vector Database
         if docs:
             _split_and_load_docs(docs)
             st.toast(f"Document *{str([doc_file.name for doc_file in st.session_state.rag_docs])[1:-1]}* loaded successfully.", icon="✅")
@@ -100,6 +101,7 @@ def load_url_to_db():
 
 def initialize_vector_db(docs):
     if "AZ_OPENAI_API_KEY" not in os.environ:
+        # OpenAIEmbeddings turns text into numerical vectors that capture semantic meaning
         embedding = OpenAIEmbeddings(api_key=st.session_state.openai_api_key)
     else:
         embedding = AzureOpenAIEmbeddings(
@@ -127,9 +129,12 @@ def initialize_vector_db(docs):
 
 
 def _split_and_load_docs(docs):
+    # 4. Recursive Character-based Splitting .. other (Token-based Splitting,Sentence-based Splitting,Character-based Splitting)
+    # Attempts to split text at natural boundaries (sentences, paragraphs) within character limit.
+    # Balances between maintaining coherence and adhering to character limits.
     text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=5000,
-        chunk_overlap=1000,
+        chunk_size=5000, # Each chunk contains up to 5,000 characters
+        chunk_overlap=1000, # to maintain context between sections. prevent information loss when answering queries, so the context doesn’t get cut off between chunks.
     )
 
     document_chunks = text_splitter.split_documents(docs)
@@ -167,7 +172,9 @@ def get_conversational_rag_chain(llm):
         ("user", "{input}"),
     ])
     stuff_documents_chain = create_stuff_documents_chain(llm, prompt)
-
+    # create_history_aware_retriever: 
+    # combines the retriever and prompt with a LLM to create a chain that is aware of the conversation history 
+    # and can retrieve relevant documents using that context.
     return create_retrieval_chain(retriever_chain, stuff_documents_chain)
 
 
@@ -179,3 +186,14 @@ def stream_llm_rag_response(llm_stream, messages):
         yield chunk
 
     st.session_state.messages.append({"role": "assistant", "content": response_message})
+
+
+# load_doc_to_db () Summary :
+# Checks if documents exist in st.session_state.rag_docs.
+# Avoids duplicates by verifying rag_sources.
+# Limits document uploads to DB_DOCS_LIMIT.
+# Saves each document to a local directory.
+# Uses different loaders based on file type.
+# Handles errors gracefully to prevent crashes.
+# Removes temporary files after processing.
+# Loads the document into a vector database for retrieval-based AI queries.
